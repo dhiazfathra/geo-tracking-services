@@ -50,5 +50,6 @@ model Location {
 
 enum EventType {
   START
+  ONGOING
   FINISH
 }

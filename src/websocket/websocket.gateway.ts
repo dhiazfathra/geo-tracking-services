@@ -19,14 +19,14 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('locationUpdate')
   async handleLocationUpdate(client: Socket, data: any) {
-    const { deviceId, deviceName, model, os, latitude, longitude, reverseData } = data;
+    const { deviceId, deviceName, os, latitude, longitude, reverseData } = data;
     console.log('Received data:', data);
 
     // Upsert device info
     await this.prisma.device.upsert({
       where: { id: deviceId },
-      update: { name: deviceName, model, os },
-      create: { id: deviceId, name: deviceName, model, os },
+      update: { name: deviceName, os },
+      create: { id: deviceId, name: deviceName, os },
     });
 
     // Store location

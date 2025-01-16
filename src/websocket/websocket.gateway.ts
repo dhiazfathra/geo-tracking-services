@@ -19,7 +19,8 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('locationUpdate')
   async handleLocationUpdate(client: Socket, data: any) {
-    const { deviceId, deviceName, os, latitude, longitude, reverseData } = data;
+    const { deviceId, deviceName, os, latitude, longitude, reverseData, eventType } = data;
+
     console.log('Received data:', data);
 
     // Upsert device info
@@ -29,13 +30,45 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       create: { id: deviceId, name: deviceName, os },
     });
 
-    // Store location
+    // Handle timeline events
+    let timeline = await this.prisma.timeLine.findFirst({
+      where: {
+        deviceId,
+        endTime: null, // Check for active timeline
+      },
+    });
+
+    if (eventType === 'START') {
+      // If START event and no active timeline, create a new one
+      if (!timeline) {
+        timeline = await this.prisma.timeLine.create({
+          data: {
+            deviceId,
+            startTime: new Date(),
+          },
+        });
+        console.log(`New timeline started for device ${deviceId}`);
+      }
+    } else if (eventType === 'FINISH') {
+      // If FINISH event, close the current timeline
+      if (timeline) {
+        await this.prisma.timeLine.update({
+          where: { id: timeline.id },
+          data: { endTime: new Date() },
+        });
+        console.log(`Timeline ended for device ${deviceId}`);
+      }
+    }
+
+    // Store location data with timeline association
     await this.prisma.location.create({
       data: {
         deviceId,
         latitude,
         longitude,
         reverseData,
+        eventType,
+        timeLineId: timeline?.id || null, // Associate with active timeline if available
       },
     });
 
@@ -44,7 +77,6 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       deviceId,
       latitude,
       longitude,
-
       reverseData,
     });
   }

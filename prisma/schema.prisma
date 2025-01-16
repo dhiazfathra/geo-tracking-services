@@ -15,21 +15,40 @@ datasource db {
 
 model Device {
   id        String     @id @default(cuid())
-  name      String
-  model     String
-  os        String
+  name      String?
+  os        String?
   locations Location[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model TimeLine {
+  id        String     @id @default(cuid())
+  deviceId  String
+  startTime DateTime
+  endTime   DateTime?
+  locations Location[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 }
 
 model Location {
-  id          Int      @id @default(autoincrement())
+  id          Int       @id @default(autoincrement())
   deviceId    String
   latitude    Float
   longitude   Float
   reverseData Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  device      Device   @relation(fields: [deviceId], references: [id])
+  eventType   EventType @default(START)
+  timeLineId  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  device      Device    @relation(fields: [deviceId], references: [id])
+  trip        TimeLine? @relation(fields: [timeLineId], references: [id])
 
   @@index([latitude, longitude], name: "geo_index")
+}
+
+enum EventType {
+  START
+  FINISH
 }

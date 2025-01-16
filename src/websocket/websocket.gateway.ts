@@ -80,4 +80,47 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       reverseData,
     });
   }
+
+  @SubscribeMessage('realtimeMonitor')
+  async handleRealtimeMonitor(client: Socket) {
+    const ongoingTimelines = await this.prisma.timeLine.findMany({
+      where: {
+        endTime: null,
+      },
+      include: {
+        locations: {
+          orderBy: { createdAt: 'asc' },
+        },
+        Device: true,
+      },
+    });
+
+    client.emit('realtimeMonitor', ongoingTimelines);
+  }
+
+  @SubscribeMessage('timelineDetailRealtime')
+  async handleRealtimeTimelineDetail(client: Socket, data: { timelineId: string }) {
+    const timeline = await this.prisma.timeLine.findUnique({
+      where: { id: data.timelineId },
+      include: {
+        locations: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+
+    if (!timeline) {
+      client.emit('timelineDetailRealtime', { error: 'Timeline not found' });
+      return;
+    }
+
+    const device = await this.prisma.device.findUnique({
+      where: { id: timeline.deviceId },
+    });
+
+    client.emit('timelineDetailRealtime', {
+      ...timeline,
+      device,
+    });
+  }
 }

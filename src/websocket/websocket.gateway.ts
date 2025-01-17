@@ -56,15 +56,21 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   // Realtime monitor logic
   private async handleRealtimeMonitor(client: Socket) {
-    const ongoingTimelines = await this.prisma.timeLine.findMany({
-      where: { endTime: null },
-      include: {
-        locations: { orderBy: { createdAt: 'asc' } },
-        Device: true,
-      },
-    });
-
-    client.emit('realtimeMonitor', ongoingTimelines);
+    try {
+      console.log('Processing realtimeMonitor event');
+      const ongoingTimelines = await this.prisma.timeLine.findMany({
+        where: { endTime: null },
+        include: {
+          locations: true,
+          Device: true,
+        },
+      });
+      console.log('Sending ongoing timelines:', ongoingTimelines);
+      client.emit('realtimeMonitor', ongoingTimelines);
+    } catch (error) {
+      console.error('Error in handleRealtimeMonitor:', error);
+      client.emit('error', { message: 'Failed to fetch ongoing timelines' });
+    }
   }
 
   // Timeline detail realtime logic

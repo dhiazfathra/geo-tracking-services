@@ -1,22 +1,97 @@
-import { SubscribeMessage, WebSocketGateway, WebSocketServer, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
+import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from 'src/prisma/prisma.service';
 
-@WebSocketGateway()
-export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  @WebSocketServer()
-  server: Server;
+@WebSocketGateway({
+  cors: {
+    origin: '*',
+  },
+})
+export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  @WebSocketServer() server: Server;
 
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async handleConnection(client: Socket) {
+  // Handle connection
+  handleConnection(client: Socket) {
     console.log(`Client connected: ${client.id}`);
+    this.emitOngoingTimelines(client);
   }
 
-  async handleDisconnect(client: Socket) {
+  // Handle disconnection
+  handleDisconnect(client: Socket) {
     console.log(`Client disconnected: ${client.id}`);
   }
 
+  // Emit ongoing timelines immediately on connection
+  private async emitOngoingTimelines(client: Socket) {
+    const ongoingTimelines = await this.prisma.timeLine.findMany({
+      where: { endTime: null },
+      include: {
+        locations: { orderBy: { createdAt: 'asc' } },
+        Device: true,
+      },
+    });
+
+    client.emit('realtimeMonitor', ongoingTimelines);
+  }
+
+  // Unified event handler for better scalability
+  @SubscribeMessage('event')
+  async handleEvent(client: Socket, data: { type: string; payload: any }) {
+    switch (data.type) {
+      case 'realtimeMonitor':
+        await this.handleRealtimeMonitor(client);
+        break;
+
+      case 'timelineDetailRealtime':
+        await this.handleTimelineDetailRealtime(client, data.payload);
+        break;
+
+      default:
+        client.emit('error', { message: 'Invalid event type' });
+        break;
+    }
+  }
+
+  // Realtime monitor logic
+  private async handleRealtimeMonitor(client: Socket) {
+    const ongoingTimelines = await this.prisma.timeLine.findMany({
+      where: { endTime: null },
+      include: {
+        locations: { orderBy: { createdAt: 'asc' } },
+        Device: true,
+      },
+    });
+
+    client.emit('realtimeMonitor', ongoingTimelines);
+  }
+
+  // Timeline detail realtime logic
+  private async handleTimelineDetailRealtime(client: Socket, payload: { timelineId: string }) {
+    const timeline = await this.prisma.timeLine.findUnique({
+      where: { id: payload.timelineId },
+      include: {
+        locations: { orderBy: { createdAt: 'asc' } },
+      },
+    });
+
+    if (!timeline) {
+      client.emit('timelineDetailRealtime', { error: 'Timeline not found' });
+      return;
+    }
+
+    const device = await this.prisma.device.findUnique({
+      where: { id: timeline.deviceId },
+    });
+
+    client.emit('timelineDetailRealtime', {
+      ...timeline,
+      device,
+    });
+  }
+
+  // Location update logic
   @SubscribeMessage('locationUpdate')
   async handleLocationUpdate(client: Socket, data: any) {
     const { deviceId, deviceName, os, latitude, longitude, reverseData, eventType } = data;
@@ -78,49 +153,6 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       latitude,
       longitude,
       reverseData,
-    });
-  }
-
-  @SubscribeMessage('realtimeMonitor')
-  async handleRealtimeMonitor(client: Socket) {
-    const ongoingTimelines = await this.prisma.timeLine.findMany({
-      where: {
-        endTime: null,
-      },
-      include: {
-        locations: {
-          orderBy: { createdAt: 'asc' },
-        },
-        Device: true,
-      },
-    });
-
-    client.emit('realtimeMonitor', ongoingTimelines);
-  }
-
-  @SubscribeMessage('timelineDetailRealtime')
-  async handleRealtimeTimelineDetail(client: Socket, data: { timelineId: string }) {
-    const timeline = await this.prisma.timeLine.findUnique({
-      where: { id: data.timelineId },
-      include: {
-        locations: {
-          orderBy: { createdAt: 'asc' },
-        },
-      },
-    });
-
-    if (!timeline) {
-      client.emit('timelineDetailRealtime', { error: 'Timeline not found' });
-      return;
-    }
-
-    const device = await this.prisma.device.findUnique({
-      where: { id: timeline.deviceId },
-    });
-
-    client.emit('timelineDetailRealtime', {
-      ...timeline,
-      device,
     });
   }
 }

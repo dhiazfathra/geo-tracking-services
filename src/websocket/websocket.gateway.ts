@@ -4,10 +4,10 @@ import { PrismaService } from 'src/prisma/prisma.service';
 
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: '*', // Adjust CORS as needed
   },
 })
-export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
 
   constructor(private readonly prisma: PrismaService) {}

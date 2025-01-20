@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -29,7 +30,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       },
     });
 
-    client.emit('realtimeMonitor', ongoingTimelines);
+    this.server.emit('realtimeMonitor', ongoingTimelines);
   }
 
   // Unified event handler for better scalability
@@ -45,7 +46,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         break;
 
       default:
-        client.emit('error', { message: 'Invalid event type' });
+        this.server.emit('error', { message: 'Invalid event type' });
         break;
     }
   }
@@ -62,10 +63,10 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         },
       });
       console.log('Sending ongoing timelines:', ongoingTimelines);
-      client.emit('realtimeMonitor', ongoingTimelines);
+      this.server.emit('realtimeMonitor', ongoingTimelines);
     } catch (error) {
       console.error('Error in handleRealtimeMonitor:', error);
-      client.emit('error', { message: 'Failed to fetch ongoing timelines' });
+      this.server.emit('error', { message: 'Failed to fetch ongoing timelines' });
     }
   }
 
@@ -79,7 +80,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
     });
 
     if (!timeline) {
-      client.emit('timelineDetailRealtime', { error: 'Timeline not found' });
+      this.server.emit('timelineDetailRealtime', { error: 'Timeline not found' });
       return;
     }
 
@@ -87,7 +88,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       where: { id: timeline.deviceId },
     });
 
-    client.emit('timelineDetailRealtime', {
+    this.server.emit('timelineDetailRealtime', {
       ...timeline,
       device,
     });

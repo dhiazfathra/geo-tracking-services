@@ -11,113 +11,32 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   // Handle connection
   handleConnection(client: Socket) {
-    console.log(`Client connected: ${client.id}`);
-    this.emitOngoingTimelines(client);
+    console.log(`Client connected`);
   }
 
   // Handle disconnection
   handleDisconnect(client: Socket) {
-    console.log(`Client disconnected: ${client.id}`);
+    console.log(`Client disconnected`);
   }
 
-  // Emit ongoing timelines immediately on connection
-  private async emitOngoingTimelines(client: Socket) {
-    const ongoingTimelines = await this.prisma.timeLine.findMany({
-      where: { endTime: null },
-      include: {
-        locations: { orderBy: { createdAt: 'asc' } },
-        Device: true,
-      },
-    });
-
-    this.server.emit('realtimeMonitor', ongoingTimelines);
-  }
-
-  // Unified event handler for better scalability
-  @SubscribeMessage('event')
-  async handleEvent(client: Socket, data: { type: string; payload: any }) {
-    switch (data.type) {
-      case 'realtimeMonitor':
-        await this.handleRealtimeMonitor(client);
-        break;
-
-      case 'timelineDetailRealtime':
-        await this.handleTimelineDetailRealtime(client, data.payload);
-        break;
-
-      default:
-        this.server.emit('error', { message: 'Invalid event type' });
-        break;
-    }
-  }
-
-  // Realtime monitor logic
-  private async handleRealtimeMonitor(client: Socket) {
-    try {
-      console.log('Processing realtimeMonitor event');
-      const ongoingTimelines = await this.prisma.timeLine.findMany({
-        where: { endTime: null },
-        include: {
-          locations: true,
-          Device: true,
-        },
-      });
-      console.log('Sending ongoing timelines:', ongoingTimelines);
-      this.server.emit('realtimeMonitor', ongoingTimelines);
-    } catch (error) {
-      console.error('Error in handleRealtimeMonitor:', error);
-      this.server.emit('error', { message: 'Failed to fetch ongoing timelines' });
-    }
-  }
-
-  // Timeline detail realtime logic
-  private async handleTimelineDetailRealtime(client: Socket, payload: { timelineId: string }) {
-    const timeline = await this.prisma.timeLine.findUnique({
-      where: { id: payload.timelineId },
-      include: {
-        locations: { orderBy: { createdAt: 'asc' } },
-      },
-    });
-
-    if (!timeline) {
-      this.server.emit('timelineDetailRealtime', { error: 'Timeline not found' });
-      return;
-    }
-
-    const device = await this.prisma.device.findUnique({
-      where: { id: timeline.deviceId },
-    });
-
-    this.server.emit('timelineDetailRealtime', {
-      ...timeline,
-      device,
-    });
-  }
-
-  // Location update logic
   @SubscribeMessage('locationUpdate')
-  async handleLocationUpdate(client: Socket, data: any) {
+  async handleLocationUpdate(data: any) {
     const { deviceId, deviceName, os, latitude, longitude, reverseData, eventType } = data;
 
-    console.log('Received data:', data);
-
-    // Upsert device info
     await this.prisma.device.upsert({
       where: { id: deviceId },
       update: { name: deviceName, os },
       create: { id: deviceId, name: deviceName, os },
     });
 
-    // Handle timeline events
     let timeline = await this.prisma.timeLine.findFirst({
       where: {
         deviceId,
-        endTime: null, // Check for active timeline
+        endTime: null,
       },
     });
 
     if (eventType === 'START') {
-      // If START event and no active timeline, create a new one
       if (!timeline) {
         timeline = await this.prisma.timeLine.create({
           data: {
@@ -128,7 +47,6 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         console.log(`New timeline started for device ${deviceId}`);
       }
     } else if (eventType === 'FINISH') {
-      // If FINISH event, close the current timeline
       if (timeline) {
         await this.prisma.timeLine.update({
           where: { id: timeline.id },
@@ -138,7 +56,6 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       }
     }
 
-    // Store location data with timeline association
     await this.prisma.location.create({
       data: {
         deviceId,
@@ -146,16 +63,90 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         longitude,
         reverseData,
         eventType,
-        timeLineId: timeline?.id || null, // Associate with active timeline if available
+        timeLineId: timeline?.id || null,
       },
     });
 
-    // Broadcast the update to all clients
     this.server.emit('locationUpdate', {
       deviceId,
       latitude,
       longitude,
       reverseData,
     });
+  }
+
+  @SubscribeMessage('activeTimeline')
+  async timelineActive(client: Socket) {
+    console.log('Event "activeTimeline" diterima');
+
+    try {
+      const data = await this.prisma.timeLine.findMany({
+        where: {
+          endTime: null,
+        },
+        include: { Device: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (data.length === 0) {
+        const message = JSON.stringify({
+          event: 'activeTimeline',
+          message: 'No activity yet!!',
+        });
+
+        client.send(message);
+        // this.server.clients.forEach((client: any) => {
+        //   client.send(message);
+        // });
+      } else {
+        const message = JSON.stringify({
+          event: 'activeTimeline',
+          data,
+        });
+
+        client.send(message);
+        // this.server.clients.forEach((client: any) => {
+        //   client.send(message);
+        // });
+      }
+    } catch (error) {
+      const errorMessage = JSON.stringify({
+        event: 'activeTimeline',
+        message: 'Failed to fetch ongoing timelines',
+      });
+
+      client.send(errorMessage);
+      // this.server.clients.forEach((client: any) => {
+      //   client.send(errorMessage);
+      // });
+    }
+  }
+
+  @SubscribeMessage('detailActivity')
+  async detailActivity(client: Socket, data: any) {
+    console.log('Event "detailActivity" diterima');
+    console.log('Payload diterima:', data);
+
+    try {
+      const datas = await this.prisma.location.findMany({
+        where: {
+          timeLineId: data.timelineId,
+        },
+
+        orderBy: { createdAt: 'asc' },
+      });
+      const message = JSON.stringify({
+        event: 'detailActivity',
+        datas,
+      });
+      client.send(message);
+    } catch (error) {
+      const errorMessage = JSON.stringify({
+        event: 'detailActivity',
+        message: 'Failed to fetch detail timelines',
+      });
+
+      client.send(errorMessage);
+    }
   }
 }

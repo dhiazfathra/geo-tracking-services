@@ -21,7 +21,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   @SubscribeMessage('locationUpdate')
-  async handleLocationUpdate(data: any) {
+  async handleLocationUpdate(client: Socket, data: any) {
     const { deviceName, os, latitude, longitude, reverseData, eventType } = data;
     let { deviceId } = data;
 
@@ -100,7 +100,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       console.log(`Location inserted for device ${deviceId}: (${latitude}, ${longitude})`);
 
       // Emit data terbaru ke client
-      this.server.emit('locationUpdate', {
+      client.send('locationUpdate', {
         deviceId,
         latitude,
         longitude,

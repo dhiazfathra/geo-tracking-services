@@ -25,6 +25,10 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
     const { deviceName, os, latitude, longitude, reverseData, eventType } = data;
     let { deviceId } = data;
 
+    console.log('====================================');
+    console.log(JSON.stringify(data), 'dari devices');
+    console.log('====================================');
+
     // Generate deviceId jika undefined
     if (!deviceId) {
       deviceId = uuidv4();

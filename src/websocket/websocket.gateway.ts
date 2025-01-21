@@ -25,9 +25,15 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
     const { deviceName, os, latitude, longitude, reverseData, eventType } = data;
     let { deviceId } = data;
 
-    console.log('====================================');
-    console.log(JSON.stringify(data), 'dari devices');
-    console.log('====================================');
+    // Log data yang diterima
+    console.log('Received location update:');
+    console.log('Data:', JSON.stringify(data, null, 2));
+
+    // Validasi data utama
+    if (!latitude || !longitude || !eventType) {
+      console.error('Invalid data received:', { latitude, longitude, eventType });
+      return { status: 'error', message: 'Invalid data received' };
+    }
 
     // Generate deviceId jika undefined
     if (!deviceId) {
@@ -35,68 +41,76 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       console.log(`Generated new deviceId: ${deviceId}`);
     }
 
-    // Upsert untuk Device (create jika tidak ada, update jika ada)
-    await this.prisma.device.upsert({
-      where: { id: deviceId },
-      update: { name: deviceName || 'Unknown Device', os: os || 'Unknown OS' },
-      create: {
-        id: deviceId,
-        name: deviceName || 'Unknown Device',
-        os: os || 'Unknown OS',
-      },
-    });
+    try {
+      // Upsert untuk Device (create jika tidak ada, update jika ada)
+      await this.prisma.device.upsert({
+        where: { id: deviceId },
+        update: { name: deviceName || 'Unknown Device', os: os || 'Unknown OS' },
+        create: {
+          id: deviceId,
+          name: deviceName || 'Unknown Device',
+          os: os || 'Unknown OS',
+        },
+      });
+      console.log(`Device updated/created: ${deviceId}`);
 
-    // Cari timeline aktif (endTime null)
-    let timeline = await this.prisma.timeLine.findFirst({
-      where: {
-        deviceId,
-        endTime: null,
-      },
-    });
+      // Cari timeline aktif (endTime null)
+      let timeline = await this.prisma.timeLine.findFirst({
+        where: {
+          deviceId,
+          endTime: null,
+        },
+      });
 
-    // Jika eventType START, buat timeline baru jika tidak ada
-    if (eventType === 'START') {
-      if (!timeline) {
-        timeline = await this.prisma.timeLine.create({
-          data: {
-            deviceId,
-            startTime: new Date(),
-          },
-        });
-        console.log(`New timeline started for device ${deviceId}`);
+      // Jika eventType START, buat timeline baru jika tidak ada
+      if (eventType === 'START') {
+        if (!timeline) {
+          timeline = await this.prisma.timeLine.create({
+            data: {
+              deviceId,
+              startTime: new Date(),
+            },
+          });
+          console.log(`New timeline started for device ${deviceId}`);
+        }
       }
-    }
 
-    // Jika eventType FINISH, tutup timeline aktif
-    else if (eventType === 'FINISH') {
-      if (timeline) {
-        await this.prisma.timeLine.update({
-          where: { id: timeline.id },
-          data: { endTime: new Date() },
-        });
-        console.log(`Timeline ended for device ${deviceId}`);
+      // Jika eventType FINISH, tutup timeline aktif
+      else if (eventType === 'FINISH') {
+        if (timeline) {
+          await this.prisma.timeLine.update({
+            where: { id: timeline.id },
+            data: { endTime: new Date() },
+          });
+          console.log(`Timeline ended for device ${deviceId}`);
+        }
       }
-    }
 
-    // Insert data lokasi
-    await this.prisma.location.create({
-      data: {
+      // Insert data lokasi
+      await this.prisma.location.create({
+        data: {
+          deviceId,
+          latitude,
+          longitude,
+          reverseData: reverseData || 'Unknown',
+          eventType,
+          timeLineId: timeline?.id || null,
+        },
+      });
+      console.log(`Location inserted for device ${deviceId}: (${latitude}, ${longitude})`);
+
+      // Emit data terbaru ke client
+      this.server.emit('locationUpdate', {
         deviceId,
         latitude,
         longitude,
         reverseData,
-        eventType,
-        timeLineId: timeline?.id || null,
-      },
-    });
+      });
 
-    // Emit data terbaru ke client
-    this.server.emit('locationUpdate', {
-      deviceId,
-      latitude,
-      longitude,
-      reverseData,
-    });
+      console.log('Location update emitted to clients.');
+    } catch (error) {
+      console.error('Error handling location update:', error);
+    }
   }
 
   @SubscribeMessage('activeTimeline')

@@ -2,6 +2,7 @@
 import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { v4 as uuidv4 } from 'uuid';
 
 @WebSocketGateway({ cors: { origin: '*' } })
 export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -21,14 +22,27 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('locationUpdate')
   async handleLocationUpdate(data: any) {
-    const { deviceId, deviceName, os, latitude, longitude, reverseData, eventType } = data;
+    const { deviceName, os, latitude, longitude, reverseData, eventType } = data;
+    let { deviceId } = data;
 
+    // Generate deviceId jika undefined
+    if (!deviceId) {
+      deviceId = uuidv4();
+      console.log(`Generated new deviceId: ${deviceId}`);
+    }
+
+    // Upsert untuk Device (create jika tidak ada, update jika ada)
     await this.prisma.device.upsert({
       where: { id: deviceId },
-      update: { name: deviceName, os },
-      create: { id: deviceId, name: deviceName, os },
+      update: { name: deviceName || 'Unknown Device', os: os || 'Unknown OS' },
+      create: {
+        id: deviceId,
+        name: deviceName || 'Unknown Device',
+        os: os || 'Unknown OS',
+      },
     });
 
+    // Cari timeline aktif (endTime null)
     let timeline = await this.prisma.timeLine.findFirst({
       where: {
         deviceId,
@@ -36,6 +50,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       },
     });
 
+    // Jika eventType START, buat timeline baru jika tidak ada
     if (eventType === 'START') {
       if (!timeline) {
         timeline = await this.prisma.timeLine.create({
@@ -46,7 +61,10 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         });
         console.log(`New timeline started for device ${deviceId}`);
       }
-    } else if (eventType === 'FINISH') {
+    }
+
+    // Jika eventType FINISH, tutup timeline aktif
+    else if (eventType === 'FINISH') {
       if (timeline) {
         await this.prisma.timeLine.update({
           where: { id: timeline.id },
@@ -56,6 +74,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       }
     }
 
+    // Insert data lokasi
     await this.prisma.location.create({
       data: {
         deviceId,
@@ -67,6 +86,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       },
     });
 
+    // Emit data terbaru ke client
     this.server.emit('locationUpdate', {
       deviceId,
       latitude,

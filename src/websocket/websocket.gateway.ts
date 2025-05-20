@@ -1,23 +1,134 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { WebSocketGateway, WebSocketServer, SubscribeMessage, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
+import { ConfigService } from '@nestjs/config';
+import { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit, SubscribeMessage, WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
+import { EventType } from '@prisma/client';
 import { Server, Socket } from 'socket.io';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { v4 as uuidv4 } from 'uuid';
 
 @WebSocketGateway({ cors: { origin: '*' } })
-export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit {
   @WebSocketServer() server: Server;
 
-  constructor(private readonly prisma: PrismaService) {}
+  private connectedClients: Map<string, { socket: Socket; lastActivity: Date; deviceId?: string }> = new Map();
+
+  // Ping interval in milliseconds (default: 60 seconds)
+  private pingInterval: number = 60000;
+  private pingIntervalId: NodeJS.Timeout;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {
+    // Get ping interval from config or use default (60 seconds)
+    const configInterval = this.configService.get<number>('PING_INTERVAL_SECONDS');
+    if (configInterval) {
+      this.pingInterval = configInterval * 1000; // Convert to milliseconds
+    }
+    console.log(`Ping interval set to ${this.pingInterval / 1000} seconds`);
+  }
+
+  afterInit(server: Server) {
+    console.log('WebSocket Gateway initialized');
+    this.startPingInterval();
+  }
+
+  private startPingInterval() {
+    if (this.pingIntervalId) {
+      clearInterval(this.pingIntervalId);
+    }
+
+    this.pingIntervalId = setInterval(() => {
+      this.pingIdleClients();
+    }, this.pingInterval);
+  }
+
+  private async pingIdleClients() {
+    const now = new Date();
+    console.log(`Checking for idle clients at ${now.toISOString()}`);
+
+    for (const [clientId, clientInfo] of this.connectedClients.entries()) {
+      const timeSinceLastActivity = now.getTime() - clientInfo.lastActivity.getTime();
+
+      if (timeSinceLastActivity >= this.pingInterval) {
+        console.log(`Pinging idle client ${clientId} (Device ID: ${clientInfo.deviceId || 'unknown'})`);
+
+        try {
+          clientInfo.socket.emit('ping', {
+            timestamp: now.toISOString(),
+            message: 'Are you still there?',
+          });
+
+          if (clientInfo.deviceId) {
+            try {
+              const timeline = await this.prisma.timeLine.findFirst({
+                where: {
+                  deviceId: clientInfo.deviceId,
+                  endTime: null,
+                },
+              });
+
+              const lastLocation = await this.prisma.location.findFirst({
+                where: {
+                  deviceId: clientInfo.deviceId,
+                },
+                orderBy: {
+                  createdAt: 'desc',
+                },
+              });
+
+              await this.prisma.location.create({
+                data: {
+                  deviceId: clientInfo.deviceId,
+                  latitude: lastLocation?.latitude || 0,
+                  longitude: lastLocation?.longitude || 0,
+                  reverseData: lastLocation?.reverseData || 'Device idle',
+                  eventType: EventType.IDLE,
+                  timeLineId: timeline?.id || null,
+                },
+              });
+
+              console.log(`IDLE event stored for device ${clientInfo.deviceId}`);
+            } catch (dbError) {
+              console.error(`Error storing IDLE event for device ${clientInfo.deviceId}:`, dbError);
+            }
+          }
+        } catch (error) {
+          console.error(`Error pinging client ${clientId}:`, error);
+        }
+      }
+    }
+  }
 
   // Handle connection
   handleConnection(client: Socket) {
-    console.log(`Client connected`);
+    console.log(`Client connected: ${client.id}`);
+
+    this.connectedClients.set(client.id, {
+      socket: client,
+      lastActivity: new Date(),
+    });
   }
 
   // Handle disconnection
   handleDisconnect(client: Socket) {
-    console.log(`Client disconnected`);
+    console.log(`Client disconnected: ${client.id}`);
+    this.connectedClients.delete(client.id);
+  }
+
+  // Handle ping response from client
+  @SubscribeMessage('pong')
+  handlePong(client: Socket, data: any) {
+    console.log(`Received pong from client ${client.id}:`, data);
+
+    const clientInfo = this.connectedClients.get(client.id);
+    if (clientInfo) {
+      clientInfo.lastActivity = new Date();
+
+      if (data && data.deviceId) {
+        clientInfo.deviceId = data.deviceId;
+      }
+    }
   }
 
   @SubscribeMessage('locationUpdate')
@@ -28,6 +139,14 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
     // Log data yang diterima
     console.log('Received location update:');
     console.log('Data:', JSON.stringify(data, null, 2));
+
+    const clientInfo = this.connectedClients.get(client.id);
+    if (clientInfo) {
+      clientInfo.lastActivity = new Date();
+      if (deviceId) {
+        clientInfo.deviceId = deviceId;
+      }
+    }
 
     // Validasi data utama
     if (!latitude || !longitude || !eventType) {

@@ -12,20 +12,20 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   private connectedClients: Map<string, { socket: Socket; lastActivity: Date; deviceId?: string }> = new Map();
 
-  // Ping interval in milliseconds (default: 60 seconds)
-  private pingInterval: number = 60000;
+  // Ping interval in milliseconds (default: 1 hour = 3600000 ms)
+  private pingInterval: number = 3600000;
   private pingIntervalId: NodeJS.Timeout;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
   ) {
-    // Get ping interval from config or use default (60 seconds)
+    // Get ping interval from config or use default (1 hour)
     const configInterval = this.configService.get<number>('PING_INTERVAL_SECONDS');
     if (configInterval) {
       this.pingInterval = configInterval * 1000; // Convert to milliseconds
     }
-    console.log(`Ping interval set to ${this.pingInterval / 1000} seconds`);
+    console.log(`Idle check interval set to ${this.pingInterval / 1000} seconds (${this.pingInterval / 3600000} hours)`);
   }
 
   afterInit(server: Server) {
@@ -51,16 +51,18 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       const timeSinceLastActivity = now.getTime() - clientInfo.lastActivity.getTime();
 
       if (timeSinceLastActivity >= this.pingInterval) {
-        console.log(`Pinging idle client ${clientId} (Device ID: ${clientInfo.deviceId || 'unknown'})`);
+        console.log(`Detected idle client ${clientId} (Device ID: ${clientInfo.deviceId || 'unknown'}) - Sending FINISH event`);
 
         try {
-          clientInfo.socket.emit('ping', {
+          // Notify client that tracking is being stopped due to inactivity
+          clientInfo.socket.emit('trackingEnded', {
             timestamp: now.toISOString(),
-            message: 'Are you still there?',
+            message: 'Tracking stopped due to inactivity',
           });
 
           if (clientInfo.deviceId) {
             try {
+              // Find active timeline for this device
               const timeline = await this.prisma.timeLine.findFirst({
                 where: {
                   deviceId: clientInfo.deviceId,
@@ -68,33 +70,45 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
                 },
               });
 
-              const lastLocation = await this.prisma.location.findFirst({
-                where: {
-                  deviceId: clientInfo.deviceId,
-                },
-                orderBy: {
-                  createdAt: 'desc',
-                },
-              });
+              if (timeline) {
+                // Get the last known location for this device
+                const lastLocation = await this.prisma.location.findFirst({
+                  where: {
+                    deviceId: clientInfo.deviceId,
+                  },
+                  orderBy: {
+                    createdAt: 'desc',
+                  },
+                });
 
-              await this.prisma.location.create({
-                data: {
-                  deviceId: clientInfo.deviceId,
-                  latitude: lastLocation?.latitude || 0,
-                  longitude: lastLocation?.longitude || 0,
-                  reverseData: lastLocation?.reverseData || 'Device idle',
-                  eventType: EventType.IDLE,
-                  timeLineId: timeline?.id || null,
-                },
-              });
+                // Create a FINISH event with the last known location
+                await this.prisma.location.create({
+                  data: {
+                    deviceId: clientInfo.deviceId,
+                    latitude: lastLocation?.latitude || 0,
+                    longitude: lastLocation?.longitude || 0,
+                    reverseData: lastLocation?.reverseData || 'Tracking ended due to inactivity',
+                    eventType: EventType.FINISH,
+                    timeLineId: timeline.id,
+                  },
+                });
 
-              console.log(`IDLE event stored for device ${clientInfo.deviceId}`);
+                // Close the timeline
+                await this.prisma.timeLine.update({
+                  where: { id: timeline.id },
+                  data: { endTime: now },
+                });
+
+                console.log(`Tracking ended for idle device ${clientInfo.deviceId}, timeline ${timeline.id} closed`);
+              } else {
+                console.log(`No active timeline found for idle device ${clientInfo.deviceId}`);
+              }
             } catch (dbError) {
-              console.error(`Error storing IDLE event for device ${clientInfo.deviceId}:`, dbError);
+              console.error(`Error ending tracking for idle device ${clientInfo.deviceId}:`, dbError);
             }
           }
         } catch (error) {
-          console.error(`Error pinging client ${clientId}:`, error);
+          console.error(`Error handling idle client ${clientId}:`, error);
         }
       }
     }
@@ -107,6 +121,12 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.connectedClients.set(client.id, {
       socket: client,
       lastActivity: new Date(),
+    });
+
+    // Send welcome message to client
+    client.emit('connected', {
+      timestamp: new Date().toISOString(),
+      message: 'Connected to tracking server',
     });
   }
 
@@ -181,9 +201,11 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         },
       });
 
-      // Jika eventType START, buat timeline baru jika tidak ada
+      // Jika eventType START, buat timeline baru jika tidak ada atau jika timeline sebelumnya sudah ditutup
       if (eventType === 'START') {
+        // Check if the device has any active timeline
         if (!timeline) {
+          // Create a new timeline
           timeline = await this.prisma.timeLine.create({
             data: {
               deviceId,
@@ -191,6 +213,8 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
             },
           });
           console.log(`New timeline started for device ${deviceId}`);
+        } else {
+          console.log(`Device ${deviceId} already has an active timeline: ${timeline.id}`);
         }
       }
 

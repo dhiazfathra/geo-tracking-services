@@ -54,5 +54,4 @@ enum EventType {
   START
   ONGOING
   FINISH
-  IDLE
 }

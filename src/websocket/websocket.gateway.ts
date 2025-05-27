@@ -12,20 +12,20 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   private connectedClients: Map<string, { socket: Socket; lastActivity: Date; deviceId?: string }> = new Map();
 
-  // Ping interval in milliseconds (default: 60 seconds)
-  private pingInterval: number = 60000;
+  // Ping interval in milliseconds (default: 1 hour = 3600000 ms)
+  private pingInterval: number = 3600000;
   private pingIntervalId: NodeJS.Timeout;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
   ) {
-    // Get ping interval from config or use default (60 seconds)
+    // Get ping interval from config or use default (1 hour)
     const configInterval = this.configService.get<number>('PING_INTERVAL_SECONDS');
     if (configInterval) {
       this.pingInterval = configInterval * 1000; // Convert to milliseconds
     }
-    console.log(`Ping interval set to ${this.pingInterval / 1000} seconds`);
+    console.log(`Idle check interval set to ${this.pingInterval / 1000} seconds (${this.pingInterval / 3600000} hours)`);
   }
 
   afterInit(server: Server) {
@@ -101,7 +101,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
               clientInfo.socket.emit('trackingEnded', {
                 timestamp: now.toISOString(),
                 message: 'Tracking ended due to inactivity',
-                deviceId: clientInfo.deviceId
+                deviceId: clientInfo.deviceId,
               });
             } catch (dbError) {
               console.error(`Error storing FINISH event for device ${clientInfo.deviceId}:`, dbError);
@@ -116,9 +116,9 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
               // Tell the client we're disconnecting them
               clientInfo.socket.emit('forceDisconnect', {
                 reason: 'Inactive session terminated',
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
               });
-              
+
               // Server-side disconnect
               clientInfo.socket.disconnect();
             }
@@ -143,6 +143,12 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
     this.connectedClients.set(client.id, {
       socket: client,
       lastActivity: new Date(),
+    });
+
+    // Send welcome message to client
+    client.emit('connected', {
+      timestamp: new Date().toISOString(),
+      message: 'Connected to tracking server',
     });
   }
 
@@ -217,9 +223,11 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
         },
       });
 
-      // Jika eventType START, buat timeline baru jika tidak ada
+      // Jika eventType START, buat timeline baru jika tidak ada atau jika timeline sebelumnya sudah ditutup
       if (eventType === 'START') {
+        // Check if the device has any active timeline
         if (!timeline) {
+          // Create a new timeline
           timeline = await this.prisma.timeLine.create({
             data: {
               deviceId,
@@ -227,6 +235,8 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
             },
           });
           console.log(`New timeline started for device ${deviceId}`);
+        } else {
+          console.log(`Device ${deviceId} already has an active timeline: ${timeline.id}`);
         }
       }
 

@@ -51,16 +51,12 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       const timeSinceLastActivity = now.getTime() - clientInfo.lastActivity.getTime();
 
       if (timeSinceLastActivity >= this.pingInterval) {
-        console.log(`Pinging idle client ${clientId} (Device ID: ${clientInfo.deviceId || 'unknown'})`);
+        console.log(`Detected idle client ${clientId} (Device ID: ${clientInfo.deviceId || 'unknown'})`);
 
         try {
-          clientInfo.socket.emit('ping', {
-            timestamp: now.toISOString(),
-            message: 'Are you still there?',
-          });
-
           if (clientInfo.deviceId) {
             try {
+              // Find active timeline
               const timeline = await this.prisma.timeLine.findFirst({
                 where: {
                   deviceId: clientInfo.deviceId,
@@ -68,6 +64,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
                 },
               });
 
+              // Get last known location
               const lastLocation = await this.prisma.location.findFirst({
                 where: {
                   deviceId: clientInfo.deviceId,
@@ -77,24 +74,63 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
                 },
               });
 
+              // Create FINISH event
               await this.prisma.location.create({
                 data: {
                   deviceId: clientInfo.deviceId,
                   latitude: lastLocation?.latitude || 0,
                   longitude: lastLocation?.longitude || 0,
-                  reverseData: lastLocation?.reverseData || 'Device idle',
-                  eventType: EventType.IDLE,
+                  reverseData: lastLocation?.reverseData || 'Tracking ended due to inactivity',
+                  eventType: EventType.FINISH,
                   timeLineId: timeline?.id || null,
                 },
               });
 
-              console.log(`IDLE event stored for device ${clientInfo.deviceId}`);
+              // Close the timeline if it exists
+              if (timeline) {
+                await this.prisma.timeLine.update({
+                  where: { id: timeline.id },
+                  data: { endTime: new Date() },
+                });
+                console.log(`Timeline ended for device ${clientInfo.deviceId}`);
+              }
+
+              console.log(`FINISH event stored for device ${clientInfo.deviceId}`);
+
+              // Notify client before disconnecting
+              clientInfo.socket.emit('trackingEnded', {
+                timestamp: now.toISOString(),
+                message: 'Tracking ended due to inactivity',
+                deviceId: clientInfo.deviceId
+              });
             } catch (dbError) {
-              console.error(`Error storing IDLE event for device ${clientInfo.deviceId}:`, dbError);
+              console.error(`Error storing FINISH event for device ${clientInfo.deviceId}:`, dbError);
             }
           }
+
+          // Close the connection
+          try {
+            console.log(`Closing connection for idle client ${clientId}`);
+            // Use the proper Socket.IO disconnect method
+            if (clientInfo.socket) {
+              // Tell the client we're disconnecting them
+              clientInfo.socket.emit('forceDisconnect', {
+                reason: 'Inactive session terminated',
+                timestamp: new Date().toISOString()
+              });
+              
+              // Server-side disconnect
+              clientInfo.socket.disconnect();
+            }
+            // Remove from our connected clients map
+            this.connectedClients.delete(clientId);
+          } catch (disconnectError) {
+            console.error(`Error disconnecting client ${clientId}:`, disconnectError);
+            // Still try to remove from map even if disconnect fails
+            this.connectedClients.delete(clientId);
+          }
         } catch (error) {
-          console.error(`Error pinging client ${clientId}:`, error);
+          console.error(`Error handling idle client ${clientId}:`, error);
         }
       }
     }

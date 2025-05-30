@@ -51,18 +51,12 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       const timeSinceLastActivity = now.getTime() - clientInfo.lastActivity.getTime();
 
       if (timeSinceLastActivity >= this.pingInterval) {
-        console.log(`Detected idle client ${clientId} (Device ID: ${clientInfo.deviceId || 'unknown'}) - Sending FINISH event`);
+        console.log(`Detected idle client ${clientId} (Device ID: ${clientInfo.deviceId || 'unknown'})`);
 
         try {
-          // Notify client that tracking is being stopped due to inactivity
-          clientInfo.socket.emit('trackingEnded', {
-            timestamp: now.toISOString(),
-            message: 'Tracking stopped due to inactivity',
-          });
-
           if (clientInfo.deviceId) {
             try {
-              // Find active timeline for this device
+              // Find active timeline
               const timeline = await this.prisma.timeLine.findFirst({
                 where: {
                   deviceId: clientInfo.deviceId,
@@ -70,42 +64,70 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
                 },
               });
 
+              // Get last known location
+              const lastLocation = await this.prisma.location.findFirst({
+                where: {
+                  deviceId: clientInfo.deviceId,
+                },
+                orderBy: {
+                  createdAt: 'desc',
+                },
+              });
+
+              // Create FINISH event
+              await this.prisma.location.create({
+                data: {
+                  deviceId: clientInfo.deviceId,
+                  latitude: lastLocation?.latitude || 0,
+                  longitude: lastLocation?.longitude || 0,
+                  reverseData: lastLocation?.reverseData || 'Tracking ended due to inactivity',
+                  eventType: EventType.FINISH,
+                  timeLineId: timeline?.id || null,
+                },
+              });
+
+              // Close the timeline if it exists
               if (timeline) {
-                // Get the last known location for this device
-                const lastLocation = await this.prisma.location.findFirst({
-                  where: {
-                    deviceId: clientInfo.deviceId,
-                  },
-                  orderBy: {
-                    createdAt: 'desc',
-                  },
-                });
-
-                // Create a FINISH event with the last known location
-                await this.prisma.location.create({
-                  data: {
-                    deviceId: clientInfo.deviceId,
-                    latitude: lastLocation?.latitude || 0,
-                    longitude: lastLocation?.longitude || 0,
-                    reverseData: lastLocation?.reverseData || 'Tracking ended due to inactivity',
-                    eventType: EventType.FINISH,
-                    timeLineId: timeline.id,
-                  },
-                });
-
-                // Close the timeline
                 await this.prisma.timeLine.update({
                   where: { id: timeline.id },
-                  data: { endTime: now },
+                  data: { endTime: new Date() },
                 });
-
-                console.log(`Tracking ended for idle device ${clientInfo.deviceId}, timeline ${timeline.id} closed`);
-              } else {
-                console.log(`No active timeline found for idle device ${clientInfo.deviceId}`);
+                console.log(`Timeline ended for device ${clientInfo.deviceId}`);
               }
+
+              console.log(`FINISH event stored for device ${clientInfo.deviceId}`);
+
+              // Notify client before disconnecting
+              clientInfo.socket.emit('trackingEnded', {
+                timestamp: now.toISOString(),
+                message: 'Tracking ended due to inactivity',
+                deviceId: clientInfo.deviceId,
+              });
             } catch (dbError) {
-              console.error(`Error ending tracking for idle device ${clientInfo.deviceId}:`, dbError);
+              console.error(`Error storing FINISH event for device ${clientInfo.deviceId}:`, dbError);
             }
+          }
+
+          // Close the connection
+          try {
+            console.log(`Closing connection for idle client ${clientId}`);
+            // Use the proper Socket.IO disconnect method
+            if (clientInfo.socket) {
+              // Tell the client we're disconnecting them
+              clientInfo.socket.emit('forceDisconnect', {
+                reason: 'Inactive session terminated',
+                timestamp: new Date().toISOString(),
+              });
+
+              // Server-side disconnect
+              clientInfo.socket.disconnect();
+            }
+            // Remove from our connected clients map
+            this.connectedClients.delete(clientId);
+          } catch (disconnectError) {
+            console.error(`Error disconnecting client ${clientId}:`, disconnectError);
+            // Still try to remove from map even if disconnect fails
+            this.connectedClients.delete(clientId);
           }
         } catch (error) {
           console.error(`Error handling idle client ${clientId}:`, error);

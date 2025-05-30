@@ -5,5 +5,6 @@ import { PrismaModule } from 'src/prisma/prisma.module';
 @Module({
   imports: [PrismaModule],
   providers: [WebsocketGateway],
+  exports: [WebsocketGateway], // Export WebsocketGateway to be used by other modules
 })
 export class WebsocketModule {}

@@ -14,8 +14,12 @@ async function bootstrap() {
     origin: '*',
   });
 
-  // Use WebSocket adapter
-  app.useWebSocketAdapter(new WsAdapter(app));
+  // Use WebSocket adapter with proper configuration
+  const wsAdapter = new WsAdapter(app);
+  app.useWebSocketAdapter(wsAdapter);
+  
+  // Log WebSocket adapter initialization
+  console.log('WebSocket adapter initialized');
 
   const config = new DocumentBuilder()
     .setTitle('Geo Tracking API')

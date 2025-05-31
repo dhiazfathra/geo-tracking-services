@@ -6,6 +6,17 @@ import { Server, Socket } from 'socket.io';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { v4 as uuidv4 } from 'uuid';
 
+// Define pointer interface for location data
+export interface Pointer {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  os: string;
+  latitude: number;
+  longitude: number;
+  timestamp: string;
+}
+
 @WebSocketGateway({ cors: { origin: '*' } })
 export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit {
   @WebSocketServer() server: Server;
@@ -264,17 +275,162 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       });
       console.log(`Location inserted for device ${deviceId}: (${latitude}, ${longitude})`);
 
-      // Emit data terbaru ke client
-      client.send('locationUpdate', {
+      // Create pointer object for broadcasting
+      const pointer: Pointer = {
+        id: uuidv4(),
         deviceId,
+        deviceName: deviceName || 'Unknown Device',
+        os: os || 'Unknown OS',
         latitude,
         longitude,
-        reverseData,
-      });
+        timestamp: new Date().toISOString(),
+      };
+
+      // Broadcast to all connected WebSocket clients
+      this.broadcastLocationUpdate(pointer);
 
       console.log('Location update emitted to clients.');
     } catch (error) {
       console.error('Error handling location update:', error);
+    }
+  }
+  
+  /**
+   * Broadcasts a location update to all connected WebSocket clients
+   * This method can be called from the MQTT service to forward location updates
+   * received via MQTT to WebSocket clients
+   * 
+   * @param pointer The pointer data to broadcast
+   */
+  broadcastLocationUpdate(pointer: Pointer) {
+    try {
+      console.log(`Broadcasting location update for device ${pointer.deviceId}`);
+      
+      // Check if this device already has a pointer
+      this.prisma.location.findMany({
+        where: { deviceId: pointer.deviceId },
+        orderBy: { createdAt: 'desc' },
+        take: 2,
+      }).then(locations => {
+        // If this is the first location for this device, emit pointerAdded
+        if (locations.length <= 1) {
+          console.log(`New device detected: ${pointer.deviceId}. Emitting pointerAdded event.`);
+          
+          // Send in Socket.IO format
+          this.server.emit('pointerAdded', pointer);
+          
+          // Also send in WebSocket format
+          this.connectedClients.forEach((clientInfo) => {
+            if (clientInfo.socket) {
+              clientInfo.socket.send(JSON.stringify({
+                event: 'pointerAdded',
+                data: pointer
+              }));
+            }
+          });
+        } else {
+          // Otherwise, emit pointerMoved
+          console.log(`Existing device moved: ${pointer.deviceId}. Emitting pointerMoved event.`);
+          
+          // Send in Socket.IO format
+          this.server.emit('pointerMoved', pointer);
+          
+          // Also send in WebSocket format
+          this.connectedClients.forEach((clientInfo) => {
+            if (clientInfo.socket) {
+              clientInfo.socket.send(JSON.stringify({
+                event: 'pointerMoved',
+                data: pointer
+              }));
+            }
+          });
+        }
+        
+        // Also emit all current pointers to ensure clients have the latest data
+        this.getAllPointers().then(pointers => {
+          // Send in Socket.IO format
+          this.server.emit('pointers', pointers);
+          
+          // Also send in WebSocket format
+          this.connectedClients.forEach((clientInfo) => {
+            if (clientInfo.socket) {
+              clientInfo.socket.send(JSON.stringify({
+                event: 'pointers',
+                data: pointers
+              }));
+            }
+          });
+        });
+        
+        // Also notify about the specific device update (for compatibility)
+        this.server.emit('locationUpdate', {
+          deviceId: pointer.deviceId,
+          latitude: pointer.latitude,
+          longitude: pointer.longitude,
+        });
+      }).catch(error => {
+        console.error('Error checking device history:', error);
+      });
+    } catch (error) {
+      console.error('Error broadcasting location update:', error);
+    }
+  }
+  
+  /**
+   * Gets all active pointers based on the most recent location for each device
+   * @returns Promise<Pointer[]> Array of pointers
+   */
+  private async getAllPointers(): Promise<Pointer[]> {
+    try {
+      // Get the most recent location for each device
+      const devices = await this.prisma.device.findMany();
+      const pointers: Pointer[] = [];
+      
+      for (const device of devices) {
+        const latestLocation = await this.prisma.location.findFirst({
+          where: { deviceId: device.id },
+          orderBy: { createdAt: 'desc' },
+        });
+        
+        if (latestLocation) {
+          pointers.push({
+            id: uuidv4(), // Generate a unique ID for this pointer
+            deviceId: device.id,
+            deviceName: device.name || `Device ${device.id}`,
+            os: device.os || 'Unknown',
+            latitude: latestLocation.latitude,
+            longitude: latestLocation.longitude,
+            timestamp: latestLocation.createdAt.toISOString(),
+          });
+        }
+      }
+      
+      return pointers;
+    } catch (error) {
+      console.error('Error getting all pointers:', error);
+      return [];
+    }
+  }
+
+  @SubscribeMessage('getPointers')
+  async handleGetPointers(client: Socket) {
+    console.log(`Client ${client.id} requested all pointers`);
+    
+    try {
+      const pointers = await this.getAllPointers();
+      // Send the pointers to the client that requested them
+      client.emit('pointers', pointers);
+      
+      // Also send a message in the format expected by the client
+      const message = JSON.stringify({
+        event: 'pointers',
+        data: pointers
+      });
+      client.send(message);
+      
+      console.log(`Sent ${pointers.length} pointers to client ${client.id}`);
+    } catch (error) {
+      console.error('Error handling getPointers request:', error);
     }
   }
 

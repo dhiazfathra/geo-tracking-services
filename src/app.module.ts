@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { WebsocketModule } from './websocket/websocket.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TimelineModule } from './timeline/timeline.module';
+import { MqttModule } from './mqtt/mqtt.module';
 
 @Module({
   imports: [
@@ -13,7 +14,8 @@ import { TimelineModule } from './timeline/timeline.module';
     }),
     WebsocketModule, 
     PrismaModule, 
-    TimelineModule
+    TimelineModule,
+    MqttModule
   ],
   controllers: [AppController],
   providers: [AppService],

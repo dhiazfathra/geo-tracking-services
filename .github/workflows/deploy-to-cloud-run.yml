@@ -2,14 +2,14 @@ name: Deploy to Google Cloud Run
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - 'src/**'
       - 'prisma/**'
       - 'package.json'
       - 'Dockerfile'
   pull_request:
-    branches: [main]
+    branches: [main, master]
     paths:
       - 'src/**'
       - 'prisma/**'

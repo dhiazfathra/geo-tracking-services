@@ -91,7 +91,8 @@ jobs:
           # Download and install the Cloud SQL Auth Proxy
           curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.16.0/cloud-sql-proxy.linux.amd64
           chmod +x cloud-sql-proxy
-          sudo mv cloud-sql-proxy /usr/local/bin/
+          # Keep the proxy in the current directory instead of moving it
+          echo "$(pwd)" >> $GITHUB_PATH
           
       - name: Run Prisma migrations
         run: |
@@ -100,8 +101,8 @@ jobs:
           # Create service account key file
           echo '${{ secrets.GCP_SA_KEY }}' > sa-key.json
           
-          # Start Cloud SQL Proxy in the background
-          cloud_sql_proxy -instances=${{ secrets.CLOUDSQL_INSTANCE_NAME }}=tcp:5432 -credential_file=sa-key.json &
+          # Start Cloud SQL Proxy in the background using the local path
+          ./cloud-sql-proxy -instances=${{ secrets.CLOUDSQL_INSTANCE_NAME }}=tcp:5432 -credential_file=sa-key.json &
           PROXY_PID=$!
           
           # Wait for proxy to start

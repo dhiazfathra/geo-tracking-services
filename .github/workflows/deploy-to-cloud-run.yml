@@ -89,10 +89,9 @@ jobs:
       - name: Install Cloud SQL Proxy
         run: |
           # Download and install the Cloud SQL Auth Proxy
-          curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.16.0/cloud-sql-proxy.linux.amd64https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.8.1/cloud-sql-proxy.linux.amd64
-          mv cloud-sql-proxy.linux.amd64 cloud-sql-proxy
-          chmod +x cloud_sql_proxy
-          sudo mv cloud_sql_proxy /usr/local/bin/
+          curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.16.0/cloud-sql-proxy.linux.amd64
+          chmod +x cloud-sql-proxy
+          sudo mv cloud-sql-proxy /usr/local/bin/
           
       - name: Run Prisma migrations
         run: |

@@ -8,6 +8,13 @@ on:
       - 'prisma/**'
       - 'package.json'
       - 'Dockerfile'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'prisma/**'
+      - 'package.json'
+      - 'Dockerfile'
   workflow_dispatch:
 
 permissions:

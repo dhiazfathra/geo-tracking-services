@@ -167,8 +167,6 @@ jobs:
             --allow-unauthenticated \
             --add-cloudsql-instances ${{ secrets.CLOUDSQL_INSTANCE_NAME }} \
             --set-env-vars="DATABASE_URL=${DATABASE_URL}" \
-            --set-env-vars="PORT=8080" \
-            --set-env-vars="HOST=${{ secrets.HOST }}" \
             --set-env-vars="JWT_APP_SECRET=${{ secrets.JWT_APP_SECRET }}" \
             --set-env-vars="JWT_CMS_SECRET=${{ secrets.JWT_CMS_SECRET }}" \
             --set-env-vars="JWT_EXPIRED=${{ secrets.JWT_EXPIRED }}" \

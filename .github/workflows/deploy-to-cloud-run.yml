@@ -137,7 +137,7 @@ jobs:
           echo '${{ secrets.GCP_SA_KEY }}' > sa-key.json
           
           # Start Cloud SQL Proxy in the background using the local path
-          ./cloud-sql-proxy -instances=${{ secrets.CLOUDSQL_INSTANCE_NAME }}=tcp:5432 -credential_file=sa-key.json &
+          ./cloud-sql-proxy ${{ secrets.CLOUDSQL_INSTANCE_NAME }}=tcp:5432 -c sa-key.json &
           PROXY_PID=$!
           
           # Wait for proxy to start

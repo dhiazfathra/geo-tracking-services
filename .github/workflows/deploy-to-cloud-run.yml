@@ -167,5 +167,5 @@ jobs:
             --allow-unauthenticated \
             --add-cloudsql-instances ${{ secrets.CLOUDSQL_INSTANCE_NAME }} \
             --set-env-vars="DATABASE_URL=${DATABASE_URL},PORT=8080" \
-            --set-env-vars-from-file=.env \
+            --env-vars-file=.env \
             --quiet

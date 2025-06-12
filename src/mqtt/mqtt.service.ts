@@ -1,11 +1,11 @@
-import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
-import * as mqtt from 'mqtt';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from 'src/prisma/prisma.service';
-import { EventType } from '@prisma/client';
-import { WebsocketGateway } from 'src/websocket/websocket.gateway';
+import * as mqtt from 'mqtt';
+import { PrismaService } from '../prisma/prisma.service';
+import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { v4 as uuidv4 } from 'uuid';
 import mqttConfig from './mqtt.config';
+import { EventType } from '../common/types';
 
 @Injectable()
 export class MqttService implements OnModuleInit, OnModuleDestroy {
@@ -29,7 +29,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     // Get MQTT configuration
     this.mqttConfig = this.configService.get('mqtt') || mqttConfig();
     this.topics = this.mqttConfig.topics;
-    
+
     this.logger.log(`MQTT configuration loaded: broker=${this.mqttConfig.broker}`);
   }
 
@@ -42,12 +42,12 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
-    
+
     if (this.client) {
       this.client.end();
     }
   }
-  
+
   /**
    * Schedules a reconnection attempt with exponential backoff
    */
@@ -55,15 +55,15 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
     }
-    
+
     this.reconnectAttempts++;
-    
+
     if (this.reconnectAttempts <= this.maxReconnectAttempts) {
       // Exponential backoff: 1s, 2s, 4s, 8s, etc. up to 2 minutes max
       const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 120000);
-      
+
       this.logger.log(`Scheduling reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
-      
+
       this.reconnectTimeout = setTimeout(() => {
         this.connectToBroker();
       }, delay);
@@ -77,9 +77,9 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`Maximum reconnect attempts (${this.maxReconnectAttempts}) reached. Stopping reconnect attempts.`);
       return;
     }
-    
+
     this.logger.log(`Connecting to MQTT broker at ${this.mqttConfig.broker} (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
-    
+
     try {
       const connectOptions: mqtt.IClientOptions = {
         clientId: this.mqttConfig.clientId,
@@ -87,59 +87,59 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         connectTimeout: 5000,
         reconnectPeriod: 0, // We'll handle reconnection manually
       };
-      
+
       // Add authentication if provided
       if (this.mqttConfig.username && this.mqttConfig.password) {
         connectOptions.username = this.mqttConfig.username;
         connectOptions.password = this.mqttConfig.password;
       }
-      
+
       this.client = mqtt.connect(this.mqttConfig.broker, connectOptions);
 
-    this.client.on('connect', () => {
-      this.logger.log('Connected to MQTT broker');
-      
-      // Subscribe to topics
-      this.client.subscribe(this.topics.locationUpdates, { qos: 1 });
-      this.client.subscribe(this.topics.deviceStatus, { qos: 1 });
-      
-      this.logger.log(`Subscribed to topics: ${Object.values(this.topics).join(', ')}`);
-    });
+      this.client.on('connect', () => {
+        this.logger.log('Connected to MQTT broker');
 
-    this.client.on('message', async (topic, payload) => {
-      try {
-        const message = JSON.parse(payload.toString());
-        this.logger.log(`Received message on topic ${topic}: ${JSON.stringify(message)}`);
-        
-        if (topic === this.topics.locationUpdates) {
-          await this.handleLocationUpdate(message);
-        } else if (topic === this.topics.deviceStatus) {
-          await this.handleDeviceStatus(message);
+        // Subscribe to topics
+        this.client.subscribe(this.topics.locationUpdates, { qos: 1 });
+        this.client.subscribe(this.topics.deviceStatus, { qos: 1 });
+
+        this.logger.log(`Subscribed to topics: ${Object.values(this.topics).join(', ')}`);
+      });
+
+      this.client.on('message', async (topic, payload) => {
+        try {
+          const message = JSON.parse(payload.toString());
+          this.logger.log(`Received message on topic ${topic}: ${JSON.stringify(message)}`);
+
+          if (topic === this.topics.locationUpdates) {
+            await this.handleLocationUpdate(message);
+          } else if (topic === this.topics.deviceStatus) {
+            await this.handleDeviceStatus(message);
+          }
+        } catch (error) {
+          this.logger.error(`Error processing MQTT message: ${error.message}`, error.stack);
         }
-      } catch (error) {
-        this.logger.error(`Error processing MQTT message: ${error.message}`, error.stack);
-      }
-    });
+      });
 
-    this.client.on('error', (error) => {
-      this.logger.error(`MQTT client error: ${error.message}`, error.stack);
-      this.scheduleReconnect();
-    });
+      this.client.on('error', error => {
+        this.logger.error(`MQTT client error: ${error.message}`, error.stack);
+        this.scheduleReconnect();
+      });
 
-    this.client.on('disconnect', () => {
-      this.logger.warn('Disconnected from MQTT broker');
-      this.scheduleReconnect();
-    });
+      this.client.on('disconnect', () => {
+        this.logger.warn('Disconnected from MQTT broker');
+        this.scheduleReconnect();
+      });
 
-    this.client.on('close', () => {
-      this.logger.warn('MQTT connection closed');
-      this.scheduleReconnect();
-    });
-    
-    this.client.on('offline', () => {
-      this.logger.warn('MQTT client is offline');
-      this.scheduleReconnect();
-    });
+      this.client.on('close', () => {
+        this.logger.warn('MQTT connection closed');
+        this.scheduleReconnect();
+      });
+
+      this.client.on('offline', () => {
+        this.logger.warn('MQTT client is offline');
+        this.scheduleReconnect();
+      });
     } catch (error) {
       this.logger.error(`Error connecting to MQTT broker: ${error.message}`);
       this.scheduleReconnect();
@@ -181,7 +181,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      if (eventType === 'START') {
+      if (eventType === EventType.START) {
         if (!timeline) {
           timeline = await this.prisma.timeLine.create({
             data: {
@@ -191,7 +191,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
           });
           this.logger.log(`New timeline started for device ${deviceId}`);
         }
-      } else if (eventType === 'FINISH') {
+      } else if (eventType === EventType.FINISH) {
         if (timeline) {
           await this.prisma.timeLine.update({
             where: { id: timeline.id },
@@ -237,9 +237,9 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
 
   async handleDeviceStatus(data: any) {
     const { deviceId, status, timestamp } = data;
-    
+
     this.logger.log(`Device ${deviceId} status update: ${status}`);
-    
+
     // You can implement device status tracking here if needed
     // For example, storing online/offline status in the database
   }

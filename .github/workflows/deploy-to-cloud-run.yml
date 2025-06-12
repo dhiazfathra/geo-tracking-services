@@ -166,6 +166,20 @@ jobs:
             --region ${{ secrets.GCP_REGION }} \
             --allow-unauthenticated \
             --add-cloudsql-instances ${{ secrets.CLOUDSQL_INSTANCE_NAME }} \
-            --set-env-vars="DATABASE_URL=${DATABASE_URL},PORT=8080" \
-            --env-vars-file=.env \
+            --set-env-vars="DATABASE_URL=${DATABASE_URL}" \
+            --set-env-vars="PORT=8080" \
+            --set-env-vars="HOST=${{ secrets.HOST }}" \
+            --set-env-vars="JWT_APP_SECRET=${{ secrets.JWT_APP_SECRET }}" \
+            --set-env-vars="JWT_CMS_SECRET=${{ secrets.JWT_CMS_SECRET }}" \
+            --set-env-vars="JWT_EXPIRED=${{ secrets.JWT_EXPIRED }}" \
+            --set-env-vars="JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}" \
+            --set-env-vars="JWT_REFRESH_EXPIRED=${{ secrets.JWT_REFRESH_EXPIRED }}" \
+            --set-env-vars="PING_INTERVAL_SECONDS=${{ secrets.PING_INTERVAL_SECONDS }}" \
+            --set-env-vars="MQTT_BROKER_URL=${{ secrets.MQTT_BROKER_URL }}" \
+            --set-env-vars="MQTT_CLIENT_ID=${{ secrets.MQTT_CLIENT_ID }}" \
+            --set-env-vars="MQTT_USERNAME=${{ secrets.MQTT_USERNAME }}" \
+            --set-env-vars="MQTT_PASSWORD=${{ secrets.MQTT_PASSWORD }}" \
+            --set-env-vars="MQTT_TOPIC_LOCATION=${{ secrets.MQTT_TOPIC_LOCATION }}" \
+            --set-env-vars="MQTT_TOPIC_DEVICE_STATUS=${{ secrets.MQTT_TOPIC_DEVICE_STATUS }}" \
+            --set-env-vars="MQTT_TOPIC_COMMANDS=${{ secrets.MQTT_TOPIC_COMMANDS }}" \
             --quiet

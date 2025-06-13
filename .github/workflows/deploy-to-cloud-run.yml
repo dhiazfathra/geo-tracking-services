@@ -1,0 +1,176 @@
+name: Deploy to Google Cloud Run
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'prisma/**'
+      - 'package.json'
+      - 'Dockerfile'
+  workflow_dispatch:
+
+# Concurrency configuration to cancel in-progress jobs on the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'package-lock.json'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Cache Prisma
+        uses: actions/cache@v3
+        with:
+          path: node_modules/.prisma
+          key: ${{ runner.os }}-prisma-${{ hashFiles('prisma/schema.prisma') }}
+        
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Create .env file
+        run: |
+          echo "PORT=3000" >> .env
+          echo "HOST=${{ secrets.HOST }}" >> .env
+          echo "JWT_APP_SECRET=${{ secrets.JWT_APP_SECRET }}" >> .env
+          echo "JWT_CMS_SECRET=${{ secrets.JWT_CMS_SECRET }}" >> .env
+          echo "JWT_EXPIRED=${{ secrets.JWT_EXPIRED }}" >> .env
+          echo "JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}" >> .env
+          echo "JWT_REFRESH_EXPIRED=${{ secrets.JWT_REFRESH_EXPIRED }}" >> .env
+          echo "PING_INTERVAL_SECONDS=${{ secrets.PING_INTERVAL_SECONDS }}" >> .env
+          echo "MQTT_BROKER_URL=${{ secrets.MQTT_BROKER_URL }}" >> .env
+          echo "MQTT_CLIENT_ID=${{ secrets.MQTT_CLIENT_ID }}" >> .env
+          echo "MQTT_USERNAME=${{ secrets.MQTT_USERNAME }}" >> .env
+          echo "MQTT_PASSWORD=${{ secrets.MQTT_PASSWORD }}" >> .env
+          echo "MQTT_TOPIC_LOCATION=${{ secrets.MQTT_TOPIC_LOCATION }}" >> .env
+          echo "MQTT_TOPIC_DEVICE_STATUS=${{ secrets.MQTT_TOPIC_DEVICE_STATUS }}" >> .env
+          echo "MQTT_TOPIC_COMMANDS=${{ secrets.MQTT_TOPIC_COMMANDS }}" >> .env
+          echo "CLOUDSQL_USER=${{ secrets.CLOUDSQL_USER }}" >> .env
+          echo "CLOUDSQL_PASSWORD=${{ secrets.CLOUDSQL_PASSWORD }}" >> .env
+          echo "CLOUDSQL_DATABASE=${{ secrets.CLOUDSQL_DATABASE }}" >> .env
+          echo "CLOUDSQL_INSTANCE_NAME=${{ secrets.CLOUDSQL_INSTANCE_NAME }}" >> .env
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          export_default_credentials: true
+
+      - name: Authenticate Docker
+        run: |
+          gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev --quiet
+          
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Docker build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/geo-tracking-repo/geo-tracking-service:${{ github.sha }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/geo-tracking-repo/geo-tracking-service:${{ github.sha }}
+          
+      # Move cache to prevent cache growth
+      - name: Move Docker cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache || true
+          
+      # - name: Install Cloud SQL Proxy
+      #   run: |
+      #     # Download and install the Cloud SQL Auth Proxy
+      #     curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.16.0/cloud-sql-proxy.linux.amd64
+      #     chmod +x cloud-sql-proxy
+      #     # Keep the proxy in the current directory instead of moving it
+      #     echo "$(pwd)" >> $GITHUB_PATH
+          
+      # - name: Run Prisma migrations
+      #   run: |
+      #     echo "Running Prisma migrations..."
+          
+      #     # Create service account key file
+      #     echo '${{ secrets.GCP_SA_KEY }}' > sa-key.json
+          
+      #     # Start Cloud SQL Proxy in the background using the local path
+      #     ./cloud-sql-proxy ${{ secrets.CLOUDSQL_INSTANCE_NAME }}=tcp:5432 -c sa-key.json &
+      #     PROXY_PID=$!
+          
+      #     # Wait for proxy to start
+      #     sleep 10
+          
+      #     # Set DATABASE_URL for migrations
+      #     export DATABASE_URL="postgresql://${{ secrets.CLOUDSQL_USER }}:${{ secrets.CLOUDSQL_PASSWORD }}@localhost/${{ secrets.CLOUDSQL_DATABASE }}?schema=public"
+          
+      #     # Run migrations
+      #     npx prisma migrate deploy
+          
+      #     # Kill the proxy
+      #     kill $PROXY_PID
+          
+      #     # Clean up
+      #     rm sa-key.json
+
+      - name: Deploy to Cloud Run
+        run: |
+          # Construct DATABASE_URL for Cloud SQL connection in Cloud Run
+          DATABASE_URL="postgresql://${{ secrets.CLOUDSQL_USER }}:${{ secrets.CLOUDSQL_PASSWORD }}@localhost/${{ secrets.CLOUDSQL_DATABASE }}?host=/cloudsql/${{ secrets.CLOUDSQL_INSTANCE_NAME }}"
+          
+          gcloud run deploy geo-tracking-service \
+            --image ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/geo-tracking-repo/geo-tracking-service:${{ github.sha }} \
+            --platform managed \
+            --region ${{ secrets.GCP_REGION }} \
+            --allow-unauthenticated \
+            --add-cloudsql-instances ${{ secrets.CLOUDSQL_INSTANCE_NAME }} \
+            --set-env-vars="DATABASE_URL=${DATABASE_URL}" \
+            --set-env-vars="JWT_APP_SECRET=${{ secrets.JWT_APP_SECRET }}" \
+            --set-env-vars="JWT_CMS_SECRET=${{ secrets.JWT_CMS_SECRET }}" \
+            --set-env-vars="JWT_EXPIRED=${{ secrets.JWT_EXPIRED }}" \
+            --set-env-vars="JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}" \
+            --set-env-vars="JWT_REFRESH_EXPIRED=${{ secrets.JWT_REFRESH_EXPIRED }}" \
+            --set-env-vars="PING_INTERVAL_SECONDS=${{ secrets.PING_INTERVAL_SECONDS }}" \
+            --set-env-vars="MQTT_BROKER_URL=${{ secrets.MQTT_BROKER_URL }}" \
+            --set-env-vars="MQTT_CLIENT_ID=${{ secrets.MQTT_CLIENT_ID }}" \
+            --set-env-vars="MQTT_USERNAME=${{ secrets.MQTT_USERNAME }}" \
+            --set-env-vars="MQTT_PASSWORD=${{ secrets.MQTT_PASSWORD }}" \
+            --set-env-vars="MQTT_TOPIC_LOCATION=${{ secrets.MQTT_TOPIC_LOCATION }}" \
+            --set-env-vars="MQTT_TOPIC_DEVICE_STATUS=${{ secrets.MQTT_TOPIC_DEVICE_STATUS }}" \
+            --set-env-vars="MQTT_TOPIC_COMMANDS=${{ secrets.MQTT_TOPIC_COMMANDS }}" \
+            --quiet

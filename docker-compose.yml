@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder # Use the builder stage for development
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./src:/app/src
+      - ./prisma:/app/prisma
+      - ./secrets:/app/secrets
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      # Use Cloud SQL proxy connection for development
+      # Note: Using host.docker.internal to access the host machine from inside the container
+      - DATABASE_URL=postgresql://${CLOUDSQL_USER}:${CLOUDSQL_PASSWORD}@host.docker.internal:${CLOUDSQL_PORT}/${CLOUDSQL_DATABASE}?schema=public
+      - HOST=${HOST:-http://localhost}
+      - JWT_APP_SECRET=${JWT_APP_SECRET:-somesecret0r2032r0ehdowejhfoiwehf}
+      - JWT_CMS_SECRET=${JWT_CMS_SECRET:-somesecret0r2032r0ehdowejhfoiwehf}
+      - JWT_EXPIRED=${JWT_EXPIRED:-7d}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-somesecret0r2032r0ehdowejhfoiwehf}
+      - JWT_REFRESH_EXPIRED=${JWT_REFRESH_EXPIRED:-14d}
+      - PING_INTERVAL_SECONDS=${PING_INTERVAL_SECONDS:-60}
+      - MQTT_BROKER_URL=${MQTT_BROKER_URL:-mqtt://broker.emqx.io:1883}
+      - MQTT_CLIENT_ID=${MQTT_CLIENT_ID:-geo-tracking-service}
+      - MQTT_USERNAME=${MQTT_USERNAME:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
+      - MQTT_TOPIC_LOCATION=${MQTT_TOPIC_LOCATION:-geo-tracking/location}
+      - MQTT_TOPIC_DEVICE_STATUS=${MQTT_TOPIC_DEVICE_STATUS:-geo-tracking/device/status}
+      - MQTT_TOPIC_COMMANDS=${MQTT_TOPIC_COMMANDS:-geo-tracking/commands}
+    command: sh -c "npx prisma generate && npx prisma migrate deploy && npm run start:dev"
+    depends_on:
+      - cloudsql-proxy
+    networks:
+      - geo-tracking-network
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Cloud SQL proxy service to connect to GCP Cloud SQL
+  cloudsql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.1
+    volumes:
+      - ./secrets:/secrets
+    command: --credentials-file=/secrets/cloudsql-client-key.json ${CLOUDSQL_INSTANCE_NAME} --address 0.0.0.0 --port ${CLOUDSQL_PORT}
+    ports:
+      - '${CLOUDSQL_PORT}:${CLOUDSQL_PORT}'
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/cloudsql-client-key.json
+    restart: always
+    networks:
+      - geo-tracking-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "${CLOUDSQL_PORT}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Keeping local postgres for development/testing if needed
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - '5432:5432'
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=geo_tracking
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - geo-tracking-network
+
+networks:
+  geo-tracking-network:
+    driver: bridge
+
+volumes:
+  postgres-data:

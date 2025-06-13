@@ -38,6 +38,8 @@ lerna-debug.log*
 .env
 .env.staging
 .env.production
+.env.dirty
+.env.local
 
 # Secrets
 secrets

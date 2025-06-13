@@ -8,13 +8,6 @@ on:
       - 'prisma/**'
       - 'package.json'
       - 'Dockerfile'
-  pull_request:
-    branches: [main, master]
-    paths:
-      - 'src/**'
-      - 'prisma/**'
-      - 'package.json'
-      - 'Dockerfile'
   workflow_dispatch:
 
 # Concurrency configuration to cancel in-progress jobs on the same branch
